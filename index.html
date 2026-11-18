@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Control Tower | Logística dos Caminhões</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    // Rótulos de valor no topo das barras
+    const valueLabelsPlugin = {
+      id: "valueLabels",
+      afterDatasetsDraw(chart, _args, pluginOpts) {
+        if (!pluginOpts || pluginOpts.display !== true) return;
+        const { ctx } = chart;
+        const formatter = (pluginOpts && pluginOpts.formatter) || ((v) => v);
+        ctx.save();
+        ctx.fillStyle = pluginOpts?.color || "#eef2ff";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        chart.data.datasets.forEach((dataset, datasetIndex) => {
+          const meta = chart.getDatasetMeta(datasetIndex);
+          if (meta.hidden) return;
+          meta.data.forEach((el, index) => {
+            const raw = dataset.data[index];
+            if (raw == null) return;
+            const label = String(formatter(raw, dataset, index));
+            ctx.font = label.length > 6
+              ? "600 10px Sora, sans-serif"
+              : "600 11px Sora, sans-serif";
+            const pos = el.tooltipPosition();
+            ctx.fillText(label, pos.x, pos.y - 4);
+          });
+        });
+        ctx.restore();
+      },
+    };
+    Chart.register(valueLabelsPlugin);
+  </script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <style>
+    :root {
+      --bg: #12162a;
+      --bg-2: #181d36;
+      --panel: #1c2240;
+      --card: #232a4a;
+      --card-2: #2a3258;
+      --line: rgba(255,255,255,.08);
+      --text: #eef2ff;
+      --muted: #9aa3c7;
+      --teal: #2dd4bf;
+      --teal-2: #14b8a6;
+      --pink: #f472b6;
+      --violet: #a78bfa;
+      --amber: #fbbf24;
+      --cyan: #22d3ee;
+      --shadow: 0 10px 30px rgba(0,0,0,.28);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "IBM Plex Sans", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(45,212,191,.14), transparent 55%),
+        radial-gradient(900px 500px at 90% 0%, rgba(167,139,250,.12), transparent 50%),
+        linear-gradient(160deg, #0f1324 0%, #151a31 45%, #101426 100%);
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 18px;
+      padding: 18px;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: linear-gradient(180deg, rgba(35,42,74,.95), rgba(24,29,54,.98));
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 18px 16px;
+      box-shadow: var(--shadow);
+      position: sticky;
+      top: 18px;
+      height: calc(100vh - 36px);
+      overflow: auto;
+    }
+
+    .brand {
+      font-family: Sora, sans-serif;
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: .02em;
+      margin-bottom: 4px;
+    }
+    .brand span { color: var(--teal); }
+    .brand-sub {
+      color: var(--muted);
+      font-size: .78rem;
+      margin-bottom: 22px;
+    }
+
+    .filter-group { margin-bottom: 18px; }
+    .filter-label {
+      display: block;
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip, .toggle {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font: inherit;
+      font-size: .82rem;
+      cursor: pointer;
+      transition: .2s ease;
+    }
+    .chip:hover, .toggle:hover { border-color: rgba(45,212,191,.45); }
+    .chip.active, .toggle.active {
+      background: linear-gradient(135deg, rgba(45,212,191,.25), rgba(34,211,238,.12));
+      border-color: rgba(45,212,191,.65);
+      color: #dffcf7;
+      box-shadow: 0 0 0 1px rgba(45,212,191,.18) inset;
+    }
+
+    select, input[type="date"] {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #151a31;
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+      margin-bottom: 8px;
+    }
+    select:focus, input:focus { outline: 1px solid rgba(45,212,191,.5); }
+
+    .toggle-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .toggle {
+      border-radius: 12px;
+      text-align: center;
+      padding: 12px 8px;
+      font-weight: 600;
+    }
+
+    .btn-reset {
+      width: 100%;
+      margin-top: 8px;
+      border: 0;
+      border-radius: 12px;
+      padding: 11px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      color: #082f2b;
+      background: linear-gradient(135deg, var(--teal), var(--cyan));
+    }
+
+    .main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .topbar h1 {
+      font-family: Sora, sans-serif;
+      font-size: clamp(1.05rem, 1.6vw, 1.35rem);
+      margin: 0 0 4px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+    .topbar p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .9rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .live-pill { flex-shrink: 0; }
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(45,212,191,.12);
+      border: 1px solid rgba(45,212,191,.35);
+      color: var(--teal);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: .78rem;
+      font-weight: 600;
+    }
+    .live-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 0 rgba(45,212,191,.7);
+      animation: pulse 1.6s infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(45,212,191,.55); }
+      70% { box-shadow: 0 0 0 10px rgba(45,212,191,0); }
+      100% { box-shadow: 0 0 0 0 rgba(45,212,191,0); }
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .kpi {
+      background: linear-gradient(160deg, rgba(42,50,88,.95), rgba(28,34,64,.95));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      box-shadow: var(--shadow);
+      min-height: 112px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .kpi::after {
+      content: "";
+      position: absolute;
+      right: -20px; top: -20px;
+      width: 80px; height: 80px;
+      border-radius: 50%;
+      background: radial-gradient(circle, var(--glow, rgba(45,212,191,.18)), transparent 70%);
+      pointer-events: none;
+    }
+    .kpi .label {
+      color: var(--muted);
+      font-size: .75rem;
+      letter-spacing: .02em;
+      position: relative;
+      z-index: 1;
+    }
+    .kpi .value {
+      font-family: Sora, sans-serif;
+      font-size: clamp(1.05rem, 1.4vw, 1.45rem);
+      font-weight: 700;
+      line-height: 1.2;
+      position: relative;
+      z-index: 1;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .kpi .hint {
+      color: var(--muted);
+      font-size: .74rem;
+      position: relative;
+      z-index: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .kpi.teal { --glow: rgba(45,212,191,.22); }
+    .kpi.pink { --glow: rgba(244,114,182,.22); }
+    .kpi.violet { --glow: rgba(167,139,250,.22); }
+    .kpi.amber { --glow: rgba(251,191,36,.2); }
+    .kpi.cyan { --glow: rgba(34,211,238,.2); }
+
+    .insights {
+      background: linear-gradient(180deg, rgba(35,42,74,.92), rgba(24,29,54,.96));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+    .insights h3 {
+      margin: 0 0 12px;
+      font-family: Sora, sans-serif;
+      font-size: .95rem;
+      font-weight: 600;
+    }
+    .insight-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .insight {
+      background: rgba(255,255,255,.03);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      min-width: 0;
+    }
+    .insight .q {
+      color: var(--muted);
+      font-size: .72rem;
+      line-height: 1.35;
+      margin-bottom: 8px;
+      min-height: 2.4em;
+    }
+    .insight .a {
+      font-family: Sora, sans-serif;
+      font-size: clamp(1.15rem, 1.6vw, 1.45rem);
+      font-weight: 700;
+      color: var(--teal);
+      line-height: 1.15;
+    }
+    .insight .a.money { color: var(--cyan); font-size: clamp(1rem, 1.35vw, 1.25rem); }
+    .insight .meta {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: .72rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.35fr 1fr .95fr;
+      gap: 14px;
+    }
+    .card {
+      background: linear-gradient(180deg, rgba(35,42,74,.92), rgba(24,29,54,.96));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+    .card h3 {
+      margin: 0 0 12px;
+      font-family: Sora, sans-serif;
+      font-size: .95rem;
+      font-weight: 600;
+    }
+    .chart-wrap { position: relative; width: 100%; }
+    .chart-wrap.tall { height: 260px; }
+    .chart-wrap.mid { height: 220px; }
+    .chart-wrap.short { height: 180px; }
+
+    .stack { display: flex; flex-direction: column; gap: 14px; }
+    .highlight {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .hl {
+      background: rgba(255,255,255,.03);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .hl .k { color: var(--muted); font-size: .72rem; margin-bottom: 6px; }
+    .hl .v { font-family: Sora, sans-serif; font-weight: 700; font-size: 1.05rem; }
+    .hl .s { color: var(--muted); font-size: .75rem; margin-top: 4px; }
+
+    .city-map {
+      height: 320px;
+      position: relative;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      overflow: hidden;
+      background: #e8eef5;
+      z-index: 0;
+    }
+    .city-map .leaflet-container {
+      width: 100%;
+      height: 100%;
+      font: inherit;
+      background: #e8eef5;
+    }
+    .city-map .map-caption {
+      position: absolute;
+      left: 10px;
+      bottom: 8px;
+      z-index: 500;
+      color: #334155;
+      font-size: .64rem;
+      background: rgba(255,255,255,.88);
+      border: 1px solid rgba(15,23,42,.08);
+      border-radius: 8px;
+      padding: 4px 8px;
+      pointer-events: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+    .city-dot-marker {
+      background: transparent;
+      border: 0;
+    }
+    .city-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      border: 1.5px solid #fff;
+      box-shadow: 0 0 0 1px rgba(15,23,42,.15), 0 1px 3px rgba(0,0,0,.3);
+    }
+    .city-dot-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+    }
+    .city-dot-wrap:hover .city-dot {
+      width: 10px;
+      height: 10px;
+    }
+    .leaflet-popup-content-wrapper {
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    }
+    .leaflet-popup-content {
+      margin: 10px 12px;
+      font-family: "IBM Plex Sans", sans-serif;
+      font-size: 13px;
+      color: #0f172a;
+    }
+    .leaflet-popup-content strong { font-family: Sora, sans-serif; }
+
+    .rank-list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow: auto; }
+    .rank-item {
+      display: grid;
+      grid-template-columns: 24px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.03);
+    }
+    .rank-item .pos {
+      width: 24px; height: 24px; border-radius: 8px;
+      display: grid; place-items: center;
+      background: rgba(45,212,191,.15);
+      color: var(--teal);
+      font-size: .75rem;
+      font-weight: 700;
+    }
+    .rank-item .name { font-size: .85rem; }
+    .rank-item .meta { color: var(--muted); font-size: .72rem; }
+    .rank-item .val { font-family: Sora, sans-serif; font-weight: 700; color: var(--cyan); }
+
+    .bottom-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 14px;
+    }
+
+    @media (max-width: 1280px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid, .bottom-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 1fr; padding: 12px; gap: 12px; }
+      .sidebar { position: relative; top: 0; height: auto; }
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid, .bottom-grid, .highlight { grid-template-columns: 1fr; }
+      .city-map { height: 280px; }
+      .topbar { align-items: start; }
+      .live-pill { align-self: start; }
+    }
+    @media (max-width: 640px) {
+      .kpi-grid, .insight-grid { grid-template-columns: 1fr; }
+      .chart-wrap.tall { height: 220px; }
+      .chart-wrap.mid { height: 200px; }
+      .city-map { height: 260px; }
+      .topbar h1 { font-size: 1.05rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">Control <span>Tower</span></div>
+      <div class="brand-sub">Logística dos Caminhões · Performance Overview</div>
+
+      <div class="filter-group">
+        <span class="filter-label">Período</span>
+        <div class="chip-row" id="monthChips"></div>
+      </div>
+
+      <div class="filter-group">
+        <span class="filter-label">Intervalo de datas</span>
+        <input type="date" id="dateFrom" />
+        <input type="date" id="dateTo" />
+      </div>
+
+      <div class="filter-group">
+        <span class="filter-label">Caminhão</span>
+        <select id="filterCaminhao"><option value="">Todos</option></select>
+      </div>
+
+      <div class="filter-group">
+        <span class="filter-label">Motorista</span>
+        <select id="filterMotorista"><option value="">Todos</option></select>
+      </div>
+
+      <div class="filter-group">
+        <span class="filter-label">Cidade</span>
+        <select id="filterCidade"><option value="">Todas</option></select>
+      </div>
+
+      <div class="filter-group">
+        <span class="filter-label">Faixa de horário</span>
+        <div class="toggle-grid">
+          <button class="toggle active" data-shift="all" type="button">Todos</button>
+          <button class="toggle" data-shift="manha" type="button">Manhã</button>
+          <button class="toggle" data-shift="tarde" type="button">Tarde</button>
+          <button class="toggle" data-shift="noite" type="button">Noite</button>
+        </div>
+      </div>
+
+      <button class="btn-reset" id="resetFilters" type="button">Limpar filtros</button>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1>Transportation Control Tower | Performance Overview</h1>
+          <p id="subtitle">Entregas estruturadas · visão ao vivo</p>
+        </div>
+        <div class="live-pill"><span class="live-dot"></span> DASHBOARD VIVO</div>
+      </div>
+
+      <section class="kpi-grid">
+        <article class="kpi teal">
+          <div class="label">Total de entregas</div>
+          <div class="value" id="kpiEntregas">—</div>
+          <div class="hint" id="kpiEntregasHint">registros filtrados</div>
+        </article>
+        <article class="kpi cyan">
+          <div class="label">Valor total</div>
+          <div class="value" id="kpiValor">—</div>
+          <div class="hint">soma das entregas</div>
+        </article>
+        <article class="kpi violet">
+          <div class="label">Bairros / Ruas</div>
+          <div class="value" id="kpiGeo">—</div>
+          <div class="hint">cobertura geográfica</div>
+        </article>
+        <article class="kpi pink">
+          <div class="label">Cidade líder</div>
+          <div class="value" id="kpiCidade">—</div>
+          <div class="hint" id="kpiCidadeHint">mais entregas</div>
+        </article>
+        <article class="kpi amber">
+          <div class="label">Top caminhão</div>
+          <div class="value" id="kpiTruck">—</div>
+          <div class="hint" id="kpiTruckHint">motorista</div>
+        </article>
+        <article class="kpi teal">
+          <div class="label">Data pico</div>
+          <div class="value" id="kpiData">—</div>
+          <div class="hint" id="kpiDataHint">mais entregas no dia</div>
+        </article>
+      </section>
+
+      <section class="insights">
+        <h3>Indicadores do trimestre</h3>
+        <div class="insight-grid">
+          <article class="insight">
+            <div class="q">Nº do caminhão com mais entregas em fevereiro</div>
+            <div class="a" id="ansFebTruck">—</div>
+            <div class="meta" id="ansFebTruckMeta">fevereiro</div>
+          </article>
+          <article class="insight">
+            <div class="q">Entregas desse caminhão em fevereiro</div>
+            <div class="a" id="ansFebCount">—</div>
+            <div class="meta" id="ansFebCountMeta">entregas em fev.</div>
+          </article>
+          <article class="insight">
+            <div class="q">Entregas no dia com mais volume (todos os caminhões)</div>
+            <div class="a" id="ansPeakDayCount">—</div>
+            <div class="meta" id="ansPeakDayMeta">dia de pico</div>
+          </article>
+          <article class="insight">
+            <div class="q">Horário de pico do trimestre</div>
+            <div class="a" id="ansPeakHour">—</div>
+            <div class="meta" id="ansPeakHourMeta">hora com mais entregas</div>
+          </article>
+          <article class="insight">
+            <div class="q">Nº do caminhão que mais gerou frete no trimestre</div>
+            <div class="a" id="ansFreightTruck">—</div>
+            <div class="meta" id="ansFreightTruckMeta">maior receita de frete</div>
+          </article>
+          <article class="insight">
+            <div class="q">Valor do frete desse caminhão no trimestre</div>
+            <div class="a money" id="ansFreightValue">—</div>
+            <div class="meta" id="ansFreightValueMeta">soma do trimestre</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h3>Entregas por mês</h3>
+          <div class="chart-wrap tall"><canvas id="chartMonth"></canvas></div>
+        </article>
+
+        <article class="card stack">
+          <div>
+            <h3>Destaques do filtro</h3>
+            <div class="highlight">
+              <div class="hl">
+                <div class="k">Caminhão + motorista</div>
+                <div class="v" id="hlTruck">—</div>
+                <div class="s" id="hlTruckMeta">—</div>
+              </div>
+              <div class="hl">
+                <div class="k">Data com mais entregas</div>
+                <div class="v" id="hlDate">—</div>
+                <div class="s" id="hlDateMeta">—</div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <h3>Valor total por caminhão</h3>
+            <div class="chart-wrap mid"><canvas id="chartValorTruck"></canvas></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>Distribuição por localidade</h3>
+          <div class="city-map" id="cityMap">
+            <div id="leafletMap"></div>
+            <div class="map-caption">Região de Campinas · mapa interativo</div>
+          </div>
+        </article>
+      </section>
+
+      <section class="bottom-grid">
+        <article class="card">
+          <h3>Performance por caminhão (entregas x valor)</h3>
+          <div class="chart-wrap tall"><canvas id="chartPerf"></canvas></div>
+        </article>
+        <article class="card">
+          <h3>Ranking de cidades</h3>
+          <div class="rank-list" id="cityRank"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+    <script>window.ENTREGAS_DATA = [{"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-08", "horario": "09h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 65.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-08", "horario": "11h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 39.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-08", "horario": "12h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 69.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-08", "horario": "13h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 35.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-08", "horario": "15h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 41.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-08", "horario": "20h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 60.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-12", "horario": "11h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 69.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-12", "horario": "12h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 46.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-12", "horario": "14h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 70.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-12", "horario": "17h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 43.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-12", "horario": "18h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 45.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-12", "horario": "19h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 74.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-12", "horario": "21h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 54.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-21", "horario": "10h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 96.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-21", "horario": "11h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 43.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-21", "horario": "12h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 46.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-21", "horario": "13h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 60.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-21", "horario": "14h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 76.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-21", "horario": "16h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 78.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-21", "horario": "20h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 49.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-21", "horario": "21h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 40.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-22", "horario": "10h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 88.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-22", "horario": "12h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 101.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-22", "horario": "14h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 68.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-22", "horario": "16h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 87.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-22", "horario": "17h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 56.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-22", "horario": "21h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 95.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-28", "horario": "11h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 77.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-28", "horario": "14h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 44.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-28", "horario": "17h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 64.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-28", "horario": "18h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 37.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-28", "horario": "19h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 44.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-01-28", "horario": "22h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 95.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-02", "horario": "09h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 78.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-02", "horario": "15h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 86.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-02", "horario": "17h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 69.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-02", "horario": "18h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 69.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-10", "horario": "14h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 59.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-10", "horario": "16h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-10", "horario": "21h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 68.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "09h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 114.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "10h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 105.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "11h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 102.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "13h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 70.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "14h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 88.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "15h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 38.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "16h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 86.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "18h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-11", "horario": "21h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 106.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-13", "horario": "13h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 108.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-13", "horario": "16h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 46.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-13", "horario": "17h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 44.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-13", "horario": "20h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 77.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-26", "horario": "09h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 120.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-26", "horario": "11h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 65.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-26", "horario": "13h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 69.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-26", "horario": "14h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 71.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-26", "horario": "16h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 71.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-26", "horario": "20h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 75.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-26", "horario": "22h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 83.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-28", "horario": "11h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 41.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-28", "horario": "13h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 89.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-28", "horario": "14h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 103.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-28", "horario": "16h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 48.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-28", "horario": "18h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 54.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-28", "horario": "20h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 111.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-28", "horario": "21h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 74.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-02-28", "horario": "22h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 78.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-10", "horario": "11h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-10", "horario": "12h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 50.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-10", "horario": "16h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 60.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-10", "horario": "18h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 39.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-10", "horario": "21h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 45.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-10", "horario": "22h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 50.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-14", "horario": "14h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 81.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-14", "horario": "15h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 53.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-14", "horario": "16h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 62.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-16", "horario": "09h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 58.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-16", "horario": "10h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 72.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-16", "horario": "13h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 106.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-16", "horario": "14h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 66.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-16", "horario": "15h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 48.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-16", "horario": "20h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 91.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-16", "horario": "21h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 74.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-16", "horario": "22h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 40.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "10h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 47.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "11h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 45.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "12h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 45.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "14h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 73.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "15h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 72.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "16h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 103.5}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "18h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 109.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "21h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 87.0}, {"caminhao": "Caminhão 1", "placa": "FRT-2A41", "motorista": "João Pereira", "data": "2026-03-24", "horario": "22h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 54.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-06", "horario": "09h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 62.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-06", "horario": "11h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 87.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-06", "horario": "13h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 70.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-06", "horario": "15h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 59.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-06", "horario": "16h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 64.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-06", "horario": "21h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 115.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-07", "horario": "11h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 72.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-07", "horario": "13h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 74.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-07", "horario": "21h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 78.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-13", "horario": "14h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 36.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-13", "horario": "16h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 43.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-13", "horario": "21h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 86.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-26", "horario": "09h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 75.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-26", "horario": "15h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 81.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-26", "horario": "16h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 64.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-26", "horario": "18h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 91.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-26", "horario": "19h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 44.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-01-26", "horario": "21h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 48.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "10h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 37.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "11h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 63.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "12h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 37.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "13h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 45.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "14h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 67.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "16h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 82.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "17h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 88.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "19h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 38.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "21h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 74.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-09", "horario": "22h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 39.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "09h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 47.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "10h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 43.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "11h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 53.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "13h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 47.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "15h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 35.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "16h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 67.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "18h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 76.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "19h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 116.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "21h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 90.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-11", "horario": "22h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 89.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-12", "horario": "11h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 72.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-12", "horario": "13h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 63.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-12", "horario": "17h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 52.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-12", "horario": "18h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 63.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-12", "horario": "20h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 71.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-16", "horario": "11h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 45.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-16", "horario": "14h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 53.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-16", "horario": "15h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 37.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-16", "horario": "16h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 51.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-16", "horario": "18h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 72.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-16", "horario": "22h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 88.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "09h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 78.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "10h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 37.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "12h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 98.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "14h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 54.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "15h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 71.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "17h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 64.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "18h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 74.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "19h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 85.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "20h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 72.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-18", "horario": "21h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 46.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-19", "horario": "09h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 47.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-19", "horario": "12h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 38.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-19", "horario": "14h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 36.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-19", "horario": "15h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 41.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-19", "horario": "17h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 56.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-19", "horario": "19h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 115.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-19", "horario": "21h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 60.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "10h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 46.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "13h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 87.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "14h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 94.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "15h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 58.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "16h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 60.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "17h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 76.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "18h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 56.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "19h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 87.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "20h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 89.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-20", "horario": "21h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 70.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-23", "horario": "16h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 38.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-23", "horario": "19h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 64.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-02-23", "horario": "21h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 86.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-07", "horario": "09h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 76.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-07", "horario": "12h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 54.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-07", "horario": "18h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 89.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-07", "horario": "20h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 81.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-07", "horario": "22h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 60.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-18", "horario": "10h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 56.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-18", "horario": "11h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 88.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-18", "horario": "12h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 55.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-18", "horario": "13h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 66.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-18", "horario": "14h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 89.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-18", "horario": "16h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 70.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-18", "horario": "18h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 36.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-18", "horario": "20h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 107.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-19", "horario": "10h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 88.0}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-19", "horario": "12h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 75.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-19", "horario": "16h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 50.5}, {"caminhao": "Caminhão 2", "placa": "GHK-7B19", "motorista": "Marcos Silva", "data": "2026-03-19", "horario": "21h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 85.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-09", "horario": "10h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 41.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-09", "horario": "11h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 49.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-09", "horario": "17h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 75.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-09", "horario": "18h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 83.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-10", "horario": "09h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 39.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-10", "horario": "12h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 70.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-10", "horario": "13h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 43.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-10", "horario": "16h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 70.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-10", "horario": "20h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 39.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "09h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 41.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "10h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 66.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "12h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 37.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "13h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 89.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "15h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 67.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "17h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 44.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "18h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 53.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "20h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 49.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "21h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 35.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-12", "horario": "22h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 48.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-13", "horario": "15h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 45.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-13", "horario": "17h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 44.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-13", "horario": "21h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 39.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-13", "horario": "22h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 70.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-19", "horario": "09h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 39.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-19", "horario": "10h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 73.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-19", "horario": "13h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 74.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-19", "horario": "16h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 42.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-19", "horario": "17h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 112.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-19", "horario": "18h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 46.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-19", "horario": "19h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 65.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-19", "horario": "21h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 60.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-21", "horario": "10h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-21", "horario": "13h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 49.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-21", "horario": "17h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 90.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-21", "horario": "18h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 68.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-21", "horario": "20h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 65.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-30", "horario": "09h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 52.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-30", "horario": "11h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 116.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-30", "horario": "15h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 38.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-30", "horario": "16h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 48.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-30", "horario": "18h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 41.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-01-30", "horario": "22h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 36.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "10h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 107.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "11h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 66.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "12h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 85.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "13h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 76.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "14h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 54.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "15h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 110.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "16h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 64.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "18h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 42.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "20h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 109.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-02", "horario": "22h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 38.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "10h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 41.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "12h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 82.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "13h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 38.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "14h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 96.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "16h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 60.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "17h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 76.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "18h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 54.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "20h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 71.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-11", "horario": "21h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 76.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "09h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 78.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "11h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 51.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "12h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 64.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "15h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 57.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "16h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 37.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "17h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 79.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "18h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 74.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "19h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 43.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-13", "horario": "21h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 57.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-19", "horario": "13h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 70.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-19", "horario": "14h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 90.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-19", "horario": "18h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 42.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-02-19", "horario": "19h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 80.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "09h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 67.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "11h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 58.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "12h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 67.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "13h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 41.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "14h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 64.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "15h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 74.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "17h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 40.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "19h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-05", "horario": "20h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 89.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-06", "horario": "10h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 72.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-06", "horario": "15h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 80.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-06", "horario": "17h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 100.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-06", "horario": "18h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 68.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-06", "horario": "19h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 57.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-06", "horario": "20h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 60.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-12", "horario": "10h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 48.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-12", "horario": "11h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 65.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-12", "horario": "13h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 45.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-30", "horario": "09h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 45.0}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-30", "horario": "11h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 69.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-30", "horario": "16h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 89.5}, {"caminhao": "Caminhão 3", "placa": "JLM-3C52", "motorista": "Paulo Rocha", "data": "2026-03-30", "horario": "17h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 77.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-05", "horario": "10h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 63.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-05", "horario": "17h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 41.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-05", "horario": "18h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 65.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-05", "horario": "19h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 65.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-05", "horario": "20h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 93.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-17", "horario": "12h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 60.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-17", "horario": "15h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 54.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-17", "horario": "16h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 64.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-17", "horario": "17h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 50.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-19", "horario": "09h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 65.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-19", "horario": "10h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 64.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-19", "horario": "11h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 70.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-19", "horario": "13h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 53.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-19", "horario": "16h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 44.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-19", "horario": "20h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 75.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-19", "horario": "21h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 51.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-19", "horario": "22h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 66.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "10h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 70.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "11h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 87.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "12h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 57.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "13h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 76.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "17h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 37.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "19h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 39.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "20h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 85.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "21h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 35.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-20", "horario": "22h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 72.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "09h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 90.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "10h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 74.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "12h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 117.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "16h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 36.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "17h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 47.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "18h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 112.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "19h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 41.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "21h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 48.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-21", "horario": "22h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 90.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "09h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 66.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "11h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 73.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "12h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 63.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "13h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 50.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "14h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 69.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "16h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "20h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 40.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "21h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 67.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-27", "horario": "22h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 47.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "09h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 57.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "10h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 90.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "11h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 35.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "12h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 48.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "14h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 43.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "16h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 46.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "18h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 79.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "19h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 59.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-01-28", "horario": "21h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 71.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-02", "horario": "10h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 120.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-02", "horario": "13h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 92.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-02", "horario": "14h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 73.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-02", "horario": "15h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 43.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-02", "horario": "18h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 52.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-02", "horario": "19h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 47.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-02", "horario": "22h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 42.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-06", "horario": "09h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 72.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-06", "horario": "12h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 100.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-06", "horario": "22h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 56.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-16", "horario": "09h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 69.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-16", "horario": "14h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 68.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-16", "horario": "15h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 46.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-16", "horario": "17h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 102.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-16", "horario": "20h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 72.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-16", "horario": "22h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 60.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-23", "horario": "09h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 109.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-23", "horario": "12h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 51.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-23", "horario": "16h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 72.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-23", "horario": "19h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 86.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-28", "horario": "09h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 73.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-28", "horario": "10h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 66.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-28", "horario": "14h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 37.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-28", "horario": "16h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 45.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-02-28", "horario": "22h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 46.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-02", "horario": "10h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-02", "horario": "11h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 67.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-02", "horario": "13h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-02", "horario": "16h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 77.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-02", "horario": "17h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 73.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-02", "horario": "21h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 94.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-02", "horario": "22h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 54.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-17", "horario": "14h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 35.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-17", "horario": "17h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 66.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-17", "horario": "20h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 87.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "10h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 37.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "12h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 36.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "13h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 49.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "14h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 75.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "15h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 119.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "16h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 43.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "17h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 47.5}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "18h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 63.0}, {"caminhao": "Caminhão 4", "placa": "PQR-8D07", "motorista": "André Costa", "data": "2026-03-20", "horario": "20h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 74.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-05", "horario": "10h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 110.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-05", "horario": "14h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 41.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-05", "horario": "15h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 50.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-05", "horario": "16h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 51.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-05", "horario": "19h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 94.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-20", "horario": "09h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 76.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-20", "horario": "11h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 48.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-20", "horario": "12h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 65.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-20", "horario": "13h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 74.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-20", "horario": "15h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 41.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-20", "horario": "16h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 68.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-20", "horario": "18h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 87.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-20", "horario": "19h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 101.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-27", "horario": "10h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 58.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-27", "horario": "20h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 55.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-27", "horario": "21h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 79.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-01-27", "horario": "22h", "endereco": "Av. John Boyd Dunlop, 3100", "bairro": "Jardim Ipaussurama", "cidade": "Campinas", "valor": 36.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-05", "horario": "10h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 92.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-05", "horario": "13h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 58.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-05", "horario": "14h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 57.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-05", "horario": "19h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 77.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-05", "horario": "20h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 68.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-07", "horario": "10h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 38.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-07", "horario": "11h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 111.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-07", "horario": "13h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 49.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-07", "horario": "22h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 67.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "09h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 77.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "10h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 40.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "11h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 58.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "13h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 37.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "14h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 73.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "17h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 43.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "18h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 72.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "20h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 91.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-12", "horario": "22h", "endereco": "Av. José Paulino, 1800", "bairro": "Centro", "cidade": "Paulínia", "valor": 66.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-18", "horario": "11h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 77.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-18", "horario": "12h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 89.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-18", "horario": "15h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 44.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-18", "horario": "19h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 49.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-18", "horario": "21h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 69.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-19", "horario": "11h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 84.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-19", "horario": "13h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 39.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-19", "horario": "16h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 69.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-19", "horario": "17h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 49.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-19", "horario": "19h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 59.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-19", "horario": "20h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 60.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-19", "horario": "22h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 49.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "09h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 41.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "10h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 45.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "11h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 116.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "13h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 103.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "14h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 56.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "16h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 59.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "17h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 111.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "19h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 68.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "20h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 84.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-20", "horario": "22h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 44.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-21", "horario": "09h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 68.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-21", "horario": "11h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 68.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-21", "horario": "16h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 75.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-21", "horario": "20h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 117.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-21", "horario": "21h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 77.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-02-21", "horario": "22h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 40.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-02", "horario": "16h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 91.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-02", "horario": "17h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 61.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-02", "horario": "21h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 72.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "09h", "endereco": "Rua Antônio Carlos, 245", "bairro": "Vila Santana", "cidade": "Valinhos", "valor": 73.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "10h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 75.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "11h", "endereco": "Rua Dom Barreto, 310", "bairro": "Nova Veneza", "cidade": "Sumaré", "valor": 55.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "12h", "endereco": "Rua Sete de Setembro, 98", "bairro": "Centro", "cidade": "Sumaré", "valor": 76.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "14h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 73.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "16h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 51.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "17h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 73.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "19h", "endereco": "Av. Olívio Franceschini, 2150", "bairro": "Parque Ortolândia", "cidade": "Hortolândia", "valor": 62.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "20h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 46.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-14", "horario": "21h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 90.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-16", "horario": "09h", "endereco": "Rua José Paulino, 455", "bairro": "Centro", "cidade": "Campinas", "valor": 48.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-16", "horario": "13h", "endereco": "Av. Brasil, 1450", "bairro": "Jardim Guanabara", "cidade": "Campinas", "valor": 49.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-16", "horario": "17h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 41.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-19", "horario": "11h", "endereco": "Av. Brasil, 900", "bairro": "Vila Santa Catarina", "cidade": "Americana", "valor": 103.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-19", "horario": "16h", "endereco": "Rua Fernando de Camargo, 410", "bairro": "Centro", "cidade": "Americana", "valor": 89.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-19", "horario": "20h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 54.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-19", "horario": "21h", "endereco": "Rua Carlos Pazetti, 66", "bairro": "Jardim de Itapoan", "cidade": "Paulínia", "valor": 91.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-23", "horario": "09h", "endereco": "Rua Luiz Camilo de Camargo, 77", "bairro": "Remanso Campineiro", "cidade": "Hortolândia", "valor": 61.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-23", "horario": "10h", "endereco": "Av. Norte-Sul, 2300", "bairro": "Cambuí", "cidade": "Campinas", "valor": 52.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-23", "horario": "12h", "endereco": "Av. Joaquim Alves Corrêa, 560", "bairro": "Centro", "cidade": "Valinhos", "valor": 88.0}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-23", "horario": "16h", "endereco": "Rua Barão de Jaguara, 870", "bairro": "Centro", "cidade": "Campinas", "valor": 40.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-23", "horario": "17h", "endereco": "Av. Rebouças, 1200", "bairro": "Jardim Primavera", "cidade": "Sumaré", "valor": 67.5}, {"caminhao": "Caminhão 5", "placa": "TUV-5E66", "motorista": "Lucas Almeida", "data": "2026-03-23", "horario": "19h", "endereco": "Rua das Flores, 120", "bairro": "Centro", "cidade": "Campinas", "valor": 36.0}];</script>
+
+<script>
+    const MONEY = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    const NUM = (v) => v.toLocaleString("pt-BR");
+    const DATE_BR = (iso) => {
+      const [y, m, d] = iso.split("-");
+      return `${d}/${m}/${y}`;
+    };
+    const MONTHS = {
+      "01": "Jan", "02": "Fev", "03": "Mar", "04": "Abr", "05": "Mai", "06": "Jun",
+      "07": "Jul", "08": "Ago", "09": "Set", "10": "Out", "11": "Nov", "12": "Dez"
+    };
+
+    // Coordenadas reais das cidades (região de Campinas)
+    const CITY_GEO = {
+      Campinas: { lat: -22.9056, lng: -47.0608, color: "#0d9488" },
+      Sumaré: { lat: -22.8219, lng: -47.2669, color: "#0284c7" },
+      Valinhos: { lat: -22.9708, lng: -46.9956, color: "#7c3aed" },
+      Hortolândia: { lat: -22.8583, lng: -47.2200, color: "#db2777" },
+      Paulínia: { lat: -22.7611, lng: -47.1542, color: "#d97706" },
+      Americana: { lat: -22.7389, lng: -47.3314, color: "#2563eb" },
+    };
+
+    let RAW = [];
+    let shift = "all";
+    let selectedMonth = "all";
+    const charts = {};
+    let leafletMap = null;
+    let leafletLayer = null;
+
+    function initLeafletMap() {
+      if (leafletMap) return;
+      const el = document.getElementById("leafletMap");
+      if (!el) return;
+      if (typeof L === "undefined") {
+        el.innerHTML = `<div style="padding:16px;color:#334155;font-size:.85rem">Não foi possível carregar o mapa. Verifique a conexão.</div>`;
+        return;
+      }
+      leafletMap = L.map(el, {
+        zoomControl: true,
+        attributionControl: true,
+        scrollWheelZoom: true,
+        tapTolerance: 20,
+      }).setView([-22.85, -47.15], 11);
+
+      // Esri Street Map (mais estável em celular / links externos que OSM)
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", {
+        attribution: "Tiles &copy; Esri",
+        maxZoom: 19,
+        errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+      }).addTo(leafletMap);
+
+      leafletLayer = L.layerGroup().addTo(leafletMap);
+      const refresh = () => leafletMap && leafletMap.invalidateSize();
+      setTimeout(refresh, 80);
+      setTimeout(refresh, 400);
+      window.addEventListener("resize", refresh);
+      window.addEventListener("orientationchange", () => setTimeout(refresh, 250));
+    }
+
+    function updateMapMarkers(byCity, rows) {
+      initLeafletMap();
+      if (!leafletMap || !leafletLayer) return;
+      leafletLayer.clearLayers();
+      if (!byCity.length) {
+        leafletMap.setView([-22.85, -47.15], 11);
+        return;
+      }
+
+      const bounds = [];
+      byCity.forEach(([city, n]) => {
+        const geo = CITY_GEO[city];
+        if (!geo) return;
+        const valor = rows.filter((r) => r.cidade === city).reduce((s, r) => s + r.valor, 0);
+        const marker = L.circleMarker([geo.lat, geo.lng], {
+          radius: 5,
+          color: "#ffffff",
+          weight: 1.5,
+          fillColor: geo.color,
+          fillOpacity: 1,
+        });
+        marker.bindPopup(
+          `<strong>${city}</strong><br>${NUM(n)} entregas<br>${MONEY(valor)}`
+        );
+        marker.bindTooltip(`${city} · ${NUM(n)} entregas`, {
+          direction: "top",
+          offset: [0, -4],
+          opacity: 0.95,
+        });
+        leafletLayer.addLayer(marker);
+        bounds.push([geo.lat, geo.lng]);
+      });
+
+      if (bounds.length === 1) {
+        leafletMap.setView(bounds[0], 12);
+      } else if (bounds.length > 1) {
+        leafletMap.fitBounds(bounds, { padding: [36, 36], maxZoom: 12 });
+      }
+      setTimeout(() => leafletMap.invalidateSize(), 60);
+    }
+
+    async function loadData() {
+      // dados embutidos primeiro (WhatsApp / file:// / celular)
+      if (Array.isArray(window.ENTREGAS_DATA) && window.ENTREGAS_DATA.length) {
+        RAW = window.ENTREGAS_DATA;
+        return;
+      }
+      try {
+        const res = await fetch("entregas_data.json", { cache: "no-store" });
+        if (!res.ok) throw new Error("fetch failed");
+        RAW = await res.json();
+      } catch (err) {
+        if (Array.isArray(window.ENTREGAS_DATA) && window.ENTREGAS_DATA.length) {
+          RAW = window.ENTREGAS_DATA;
+          return;
+        }
+        throw err;
+      }
+    }
+
+    function hourNum(h) {
+      return parseInt(String(h).replace("h", ""), 10);
+    }
+
+    function inShift(horario) {
+      const h = hourNum(horario);
+      if (shift === "manha") return h >= 9 && h < 12;
+      if (shift === "tarde") return h >= 12 && h < 18;
+      if (shift === "noite") return h >= 18;
+      return true;
+    }
+
+    function populateFilters() {
+      const caminhoes = [...new Set(RAW.map((r) => r.caminhao))].sort();
+      const motoristas = [...new Set(RAW.map((r) => r.motorista))].sort();
+      const cidades = [...new Set(RAW.map((r) => r.cidade))].sort();
+      const dates = RAW.map((r) => r.data).sort();
+
+      const fill = (id, values) => {
+        const el = document.getElementById(id);
+        values.forEach((v) => {
+          const opt = document.createElement("option");
+          opt.value = v;
+          opt.textContent = v;
+          el.appendChild(opt);
+        });
+      };
+      fill("filterCaminhao", caminhoes);
+      fill("filterMotorista", motoristas);
+      fill("filterCidade", cidades);
+
+      document.getElementById("dateFrom").value = dates[0];
+      document.getElementById("dateTo").value = dates[dates.length - 1];
+      document.getElementById("dateFrom").min = dates[0];
+      document.getElementById("dateFrom").max = dates[dates.length - 1];
+      document.getElementById("dateTo").min = dates[0];
+      document.getElementById("dateTo").max = dates[dates.length - 1];
+
+      const months = [...new Set(RAW.map((r) => r.data.slice(0, 7)))].sort();
+      const chips = document.getElementById("monthChips");
+      chips.innerHTML = "";
+      const all = document.createElement("button");
+      all.type = "button";
+      all.className = "chip active";
+      all.dataset.month = "all";
+      all.textContent = "Todos";
+      chips.appendChild(all);
+      months.forEach((m) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chip";
+        btn.dataset.month = m;
+        btn.textContent = `${MONTHS[m.slice(5)]} ${m.slice(0, 4)}`;
+        chips.appendChild(btn);
+      });
+    }
+
+    function filtered() {
+      const caminhao = document.getElementById("filterCaminhao").value;
+      const motorista = document.getElementById("filterMotorista").value;
+      const cidade = document.getElementById("filterCidade").value;
+      const from = document.getElementById("dateFrom").value;
+      const to = document.getElementById("dateTo").value;
+
+      return RAW.filter((r) => {
+        if (caminhao && r.caminhao !== caminhao) return false;
+        if (motorista && r.motorista !== motorista) return false;
+        if (cidade && r.cidade !== cidade) return false;
+        if (from && r.data < from) return false;
+        if (to && r.data > to) return false;
+        if (selectedMonth !== "all" && !r.data.startsWith(selectedMonth)) return false;
+        if (!inShift(r.horario)) return false;
+        return true;
+      });
+    }
+
+    function countBy(rows, keyFn) {
+      const map = new Map();
+      rows.forEach((r) => {
+        const k = keyFn(r);
+        map.set(k, (map.get(k) || 0) + 1);
+      });
+      return [...map.entries()].sort((a, b) => b[1] - a[1]);
+    }
+
+    function sumBy(rows, keyFn, valFn = (r) => r.valor) {
+      const map = new Map();
+      rows.forEach((r) => {
+        const k = keyFn(r);
+        map.set(k, (map.get(k) || 0) + valFn(r));
+      });
+      return [...map.entries()].sort((a, b) => b[1] - a[1]);
+    }
+
+    function upsertChart(id, config) {
+      if (charts[id]) charts[id].destroy();
+      const ctx = document.getElementById(id);
+      charts[id] = new Chart(ctx, config);
+    }
+
+    function truckNum(name) {
+      const m = String(name).match(/(\d+)/);
+      return m ? m[1] : name;
+    }
+
+    function truckInfo(caminhao) {
+      const row = RAW.find((r) => r.caminhao === caminhao);
+      if (!row) return { placa: "—", motorista: "—" };
+      return { placa: row.placa, motorista: row.motorista };
+    }
+
+    function fillQuarterInsights() {
+      // Respostas fixas do trimestre (base completa)
+      const feb = RAW.filter((r) => r.data.slice(5, 7) === "02");
+      const febTruck = countBy(feb, (r) => r.caminhao);
+      if (febTruck[0]) {
+        const name = febTruck[0][0];
+        const info = truckInfo(name);
+        document.getElementById("ansFebTruck").textContent = truckNum(name);
+        document.getElementById("ansFebTruckMeta").textContent =
+          `${name} · placa ${info.placa} · ${info.motorista}`;
+        document.getElementById("ansFebCount").textContent = NUM(febTruck[0][1]);
+        document.getElementById("ansFebCountMeta").textContent =
+          `${name} · ${info.motorista}`;
+      }
+
+      const byDateAll = countBy(RAW, (r) => r.data);
+      if (byDateAll[0]) {
+        document.getElementById("ansPeakDayCount").textContent = NUM(byDateAll[0][1]);
+        document.getElementById("ansPeakDayMeta").textContent = `em ${DATE_BR(byDateAll[0][0])}`;
+      }
+
+      const byHour = countBy(RAW, (r) => hourNum(r.horario));
+      if (byHour[0]) {
+        const h = byHour[0][0];
+        document.getElementById("ansPeakHour").textContent = String(h);
+        document.getElementById("ansPeakHourMeta").textContent =
+          `${String(h).padStart(2, "0")}h · ${NUM(byHour[0][1])} entregas`;
+      }
+
+      const freight = sumBy(RAW, (r) => r.caminhao);
+      if (freight[0]) {
+        const name = freight[0][0];
+        const info = truckInfo(name);
+        document.getElementById("ansFreightTruck").textContent = truckNum(name);
+        document.getElementById("ansFreightTruckMeta").textContent =
+          `${name} · placa ${info.placa} · ${info.motorista}`;
+        document.getElementById("ansFreightValue").textContent = MONEY(freight[0][1]);
+        document.getElementById("ansFreightValueMeta").textContent =
+          `${name} · ${info.motorista}`;
+      }
+    }
+
+    function render() {
+      const rows = filtered();
+      const totalValor = rows.reduce((s, r) => s + r.valor, 0);
+      const bairros = new Set(rows.map((r) => r.bairro)).size;
+      const ruas = new Set(rows.map((r) => r.endereco)).size;
+
+      const byCity = countBy(rows, (r) => r.cidade);
+      const byTruck = countBy(rows, (r) => `${r.caminhao}|${r.motorista}|${r.placa}`);
+      const byDate = countBy(rows, (r) => r.data);
+      const valorTruck = sumBy(rows, (r) => r.caminhao);
+      const byMonth = countBy(rows, (r) => r.data.slice(0, 7)).sort((a, b) => a[0].localeCompare(b[0]));
+
+      fillQuarterInsights();
+
+      document.getElementById("kpiEntregas").textContent = NUM(rows.length);
+      document.getElementById("kpiEntregasHint").textContent = `${NUM(RAW.length)} no total da base`;
+      document.getElementById("kpiValor").textContent = MONEY(totalValor);
+      document.getElementById("kpiGeo").textContent = `${bairros} / ${ruas}`;
+
+      if (byCity[0]) {
+        document.getElementById("kpiCidade").textContent = byCity[0][0];
+        document.getElementById("kpiCidadeHint").textContent = `${NUM(byCity[0][1])} entregas`;
+      } else {
+        document.getElementById("kpiCidade").textContent = "—";
+        document.getElementById("kpiCidadeHint").textContent = "sem dados";
+      }
+
+      if (byTruck[0]) {
+        const [truck, driver] = byTruck[0][0].split("|");
+        document.getElementById("kpiTruck").textContent = truck;
+        document.getElementById("kpiTruckHint").textContent = `${driver} · ${NUM(byTruck[0][1])} entregas`;
+        document.getElementById("hlTruck").textContent = truck;
+        document.getElementById("hlTruckMeta").textContent = `${driver} · ${NUM(byTruck[0][1])} entregas · placa ${byTruck[0][0].split("|")[2]}`;
+      }
+
+      if (byDate[0]) {
+        document.getElementById("kpiData").textContent = DATE_BR(byDate[0][0]);
+        document.getElementById("kpiDataHint").textContent = `${NUM(byDate[0][1])} entregas`;
+        document.getElementById("hlDate").textContent = DATE_BR(byDate[0][0]);
+        document.getElementById("hlDateMeta").textContent = `${NUM(byDate[0][1])} entregas neste dia`;
+      }
+
+      document.getElementById("subtitle").textContent =
+        `${NUM(rows.length)} entregas · ${MONEY(totalValor)} · ${bairros} bairros · ${ruas} ruas`;
+
+      // Month chart
+      upsertChart("chartMonth", {
+        type: "bar",
+        data: {
+          labels: byMonth.map(([m]) => `${MONTHS[m.slice(5)]} ${m.slice(0, 4)}`),
+          datasets: [{
+            label: "Entregas",
+            data: byMonth.map(([, n]) => n),
+            backgroundColor: "#2dd4bf",
+            borderRadius: 8,
+            barThickness: 36,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          layout: { padding: { top: 18 } },
+          plugins: {
+            legend: { display: false },
+            valueLabels: {
+              display: true,
+              formatter: (v) => NUM(v),
+            },
+          },
+          scales: {
+            x: { ticks: { color: "#9aa3c7" }, grid: { display: false } },
+            y: {
+              beginAtZero: true,
+              display: false,
+              grace: "12%",
+            },
+          },
+        },
+      });
+
+      // Value by truck
+      const truckOrder = valorTruck.map(([k]) => k);
+      upsertChart("chartValorTruck", {
+        type: "bar",
+        data: {
+          labels: truckOrder,
+          datasets: [{
+            label: "Valor",
+            data: valorTruck.map(([, v]) => v),
+            backgroundColor: ["#2dd4bf", "#22d3ee", "#a78bfa", "#f472b6", "#fbbf24"],
+            borderRadius: 8,
+          }],
+        },
+        options: {
+          indexAxis: "y",
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: (c) => MONEY(c.raw) } },
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: "#9aa3c7",
+                callback: (v) => `R$ ${Number(v).toLocaleString("pt-BR")}`,
+              },
+              grid: { color: "rgba(255,255,255,.05)" },
+            },
+            y: { ticks: { color: "#eef2ff" }, grid: { display: false } },
+          },
+        },
+      });
+
+      // Performance dual
+      const entregasTruck = Object.fromEntries(countBy(rows, (r) => r.caminhao));
+      upsertChart("chartPerf", {
+        type: "bar",
+        data: {
+          labels: truckOrder,
+          datasets: [
+            {
+              label: "Entregas",
+              data: truckOrder.map((t) => entregasTruck[t] || 0),
+              backgroundColor: "#2dd4bf",
+              borderRadius: 6,
+            },
+            {
+              label: "Valor (R$ mil)",
+              data: truckOrder.map((t) => {
+                const found = valorTruck.find(([k]) => k === t);
+                return found ? +(found[1] / 1000).toFixed(2) : 0;
+              }),
+              backgroundColor: "#f472b6",
+              borderRadius: 6,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          layout: { padding: { top: 18 } },
+          plugins: {
+            legend: { display: false },
+            valueLabels: {
+              display: true,
+              formatter: (v, dataset) =>
+                dataset.label === "Valor (R$ mil)"
+                  ? `R$ ${Math.round(v * 1000).toLocaleString("pt-BR")}`
+                  : NUM(v),
+            },
+          },
+          scales: {
+            x: { ticks: { color: "#9aa3c7" }, grid: { display: false } },
+            y: {
+              beginAtZero: true,
+              display: false,
+              grace: "15%",
+            },
+          },
+        },
+      });
+
+      // City rank
+      const rank = document.getElementById("cityRank");
+      rank.innerHTML = byCity.map(([city, n], i) => {
+        const valor = rows.filter((r) => r.cidade === city).reduce((s, r) => s + r.valor, 0);
+        return `<div class="rank-item">
+          <div class="pos">${i + 1}</div>
+          <div>
+            <div class="name">${city}</div>
+            <div class="meta">${NUM(n)} entregas · ${MONEY(valor)}</div>
+          </div>
+          <div class="val">${((n / (rows.length || 1)) * 100).toFixed(1)}%</div>
+        </div>`;
+      }).join("") || `<div class="rank-item"><div class="name">Sem dados para o filtro</div></div>`;
+
+      // Pontos no mapa interativo (estilo Google Maps)
+      updateMapMarkers(byCity, rows);
+    }
+
+    function bindEvents() {
+      ["filterCaminhao", "filterMotorista", "filterCidade", "dateFrom", "dateTo"].forEach((id) => {
+        document.getElementById(id).addEventListener("change", render);
+      });
+
+      document.getElementById("monthChips").addEventListener("click", (e) => {
+        const btn = e.target.closest(".chip");
+        if (!btn) return;
+        selectedMonth = btn.dataset.month;
+        document.querySelectorAll("#monthChips .chip").forEach((c) => c.classList.toggle("active", c === btn));
+        render();
+      });
+
+      document.querySelectorAll(".toggle").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          shift = btn.dataset.shift;
+          document.querySelectorAll(".toggle").forEach((b) => b.classList.toggle("active", b === btn));
+          render();
+        });
+      });
+
+      document.getElementById("resetFilters").addEventListener("click", () => {
+        selectedMonth = "all";
+        shift = "all";
+        document.querySelectorAll("#monthChips .chip").forEach((c) => c.classList.toggle("active", c.dataset.month === "all"));
+        document.querySelectorAll(".toggle").forEach((b) => b.classList.toggle("active", b.dataset.shift === "all"));
+        document.getElementById("filterCaminhao").value = "";
+        document.getElementById("filterMotorista").value = "";
+        document.getElementById("filterCidade").value = "";
+        const dates = RAW.map((r) => r.data).sort();
+        document.getElementById("dateFrom").value = dates[0];
+        document.getElementById("dateTo").value = dates[dates.length - 1];
+        render();
+      });
+    }
+
+    (async function init() {
+      await loadData();
+      populateFilters();
+      bindEvents();
+      render();
+    })().catch((err) => {
+      document.body.innerHTML = `<div style="padding:40px;font-family:sans-serif;color:#fff;background:#12162a;min-height:100vh">
+        <h2>Não foi possível carregar os dados</h2>
+        <p>No celular, não abra o arquivo pelo WhatsApp. Use o link do servidor.</p>
+        <p>No PC, rode <code>abrir-dashboard.bat</code> e acesse o endereço mostrado.</p>
+        <p style="opacity:.7">${err}</p>
+      </div>`;
+    });
+  </script>
+
+</body>
+</html>
