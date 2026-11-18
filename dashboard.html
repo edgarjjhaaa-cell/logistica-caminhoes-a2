@@ -912,10 +912,12 @@
 
       const byHour = countBy(RAW, (r) => hourNum(r.horario));
       if (byHour[0]) {
-        const h = byHour[0][0];
-        document.getElementById("ansPeakHour").textContent = String(h);
+        const h = Number(byHour[0][0]);
+        const ini = `${String(h).padStart(2, "0")}h`;
+        const fim = `${String(h + 1).padStart(2, "0")}h`;
+        document.getElementById("ansPeakHour").textContent = `${ini} – ${fim}`;
         document.getElementById("ansPeakHourMeta").textContent =
-          `${String(h).padStart(2, "0")}h · ${NUM(byHour[0][1])} entregas`;
+          `${NUM(byHour[0][1])} entregas nesse intervalo`;
       }
 
       const freight = sumBy(RAW, (r) => r.caminhao);
