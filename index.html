@@ -910,14 +910,24 @@
         document.getElementById("ansPeakDayMeta").textContent = `em ${DATE_BR(byDateAll[0][0])}`;
       }
 
-      const byHour = countBy(RAW, (r) => hourNum(r.horario));
-      if (byHour[0]) {
-        const h = Number(byHour[0][0]);
-        const ini = `${String(h).padStart(2, "0")}h`;
-        const fim = `${String(h + 1).padStart(2, "0")}h`;
+      // Pico = melhor janela de 2 horas consecutivas (ex.: 16h + 17h = 80)
+      const hourMap = new Map(
+        countBy(RAW, (r) => hourNum(r.horario)).map(([h, n]) => [Number(h), n])
+      );
+      let best = null;
+      [...hourMap.keys()].sort((a, b) => a - b).forEach((h) => {
+        if (!hourMap.has(h + 1)) return;
+        const n1 = hourMap.get(h);
+        const n2 = hourMap.get(h + 1);
+        const total = n1 + n2;
+        if (!best || total > best.total) best = { ini: h, fim: h + 1, total, n1, n2 };
+      });
+      if (best) {
+        const ini = `${String(best.ini).padStart(2, "0")}h`;
+        const fim = `${String(best.fim).padStart(2, "0")}h`;
         document.getElementById("ansPeakHour").textContent = `${ini} – ${fim}`;
         document.getElementById("ansPeakHourMeta").textContent =
-          `${NUM(byHour[0][1])} entregas nesse intervalo`;
+          `${NUM(best.total)} entregas (${NUM(best.n1)} às ${ini} + ${NUM(best.n2)} às ${fim})`;
       }
 
       const freight = sumBy(RAW, (r) => r.caminhao);
